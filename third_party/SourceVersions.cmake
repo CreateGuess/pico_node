@@ -1,0 +1,3 @@
+# 固定源码包摘要，供离线解压时校验。
+set(PICO_GSTREAMER_SHA256 "e9394dc14d981891bd92d72a1d03c5c0ca5d04febcbb83b01fb62c67b21bc449")
+set(PICO_LIBNICE_SHA256 "a5f724cf09eae50c41a7517141d89da4a61ec9eaca32da4a0073faed5417ad7e")

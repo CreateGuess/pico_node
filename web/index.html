@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>XBus 实时相机</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101721;color:#e6edf5}body{max-width:1100px;margin:48px auto;padding:0 24px}h1{font-size:28px}small{color:#91a5bc}.video-container{position:relative;margin:24px 0}#fps{position:absolute;top:14px;left:14px;padding:6px 10px;border-radius:6px;background:#000b;color:#4dd9b0;font:600 16px ui-monospace,monospace;pointer-events:none;font-variant-numeric:tabular-nums}video{display:block;width:100%;aspect-ratio:16/9;background:#05080c;border-radius:16px;margin:0}button{background:#4dd9b0;color:#06291e;border:0;border-radius:8px;padding:12px 24px;font-weight:700;margin-right:12px;cursor:pointer}button:disabled{opacity:.45;cursor:default}#status{margin:20px 0;color:#9db5cf}#stats{font-variant-numeric:tabular-nums;color:#91a5bc}
+</style>
+<h1>XBus 实时相机</h1><small>JPEG 图像源 · WebRTC 视频播放</small>
+<div class="video-container"><video id="video" autoplay playsinline muted controls></video><div id="fps" aria-label="播放帧率">0.0 FPS</div></div>
+<button id="start">连接视频</button><button id="stop" disabled>断开</button>
+<div id="status" role="status">等待连接</div><div id="stats"></div>
+<script>
+const video=document.querySelector('#video'),start=document.querySelector('#start'),stop=document.querySelector('#stop'),status=document.querySelector('#status');
+let peer=null,abort=null,session=null;
+const fpsLabel=document.querySelector('#fps');
+let fpsTimer=null,frameCallback=null,fpsGeneration=0;
+
+/**
+ * @brief 停止帧率采样并清零显示，断开及重新连接时调用。
+ */
+function stopFps(){
+ // 1. 使旧回调失效，再取消当前视频回调和统计定时器。
+ ++fpsGeneration;
+ if(frameCallback!==null)video.cancelVideoFrameCallback?.(frameCallback);
+ frameCallback=null;
+ clearInterval(fpsTimer);fpsTimer=null;
+ // 2. 清除上次会话的帧率，避免重连时显示旧数据。
+ fpsLabel.textContent='0.0 FPS';
+}
+
+/**
+ * @brief 每秒计算浏览器呈现帧数的增量，在视频左上角显示播放帧率。
+ * @details 优先使用视频帧回调；旧浏览器使用播放质量计数扣除丢帧数。
+ */
+function startFps(){
+ stopFps();
+ const generation=fpsGeneration;
+ let frames=0,lastFrames=0,lastTime=performance.now(),previousPresented=null;
+ const useFrameCallback=typeof video.requestVideoFrameCallback==='function';
+ const renderedFrames=()=>{
+  const quality=video.getVideoPlaybackQuality();
+  return quality.totalVideoFrames-quality.droppedVideoFrames;
+ };
+ // 1. 累计本次会话的呈现帧数；用计数差补上主线程繁忙时遗漏的回调。
+ if(useFrameCallback){
+  const countFrame=(_now,metadata)=>{
+   if(generation!==fpsGeneration)return;
+   frames+=previousPresented===null?1:Math.max(0,metadata.presentedFrames-previousPresented);
+   previousPresented=metadata.presentedFrames;
+   frameCallback=video.requestVideoFrameCallback(countFrame);
+  };
+  frameCallback=video.requestVideoFrameCallback(countFrame);
+ }else if(typeof video.getVideoPlaybackQuality==='function'){
+  lastFrames=renderedFrames();
+ }else{
+  fpsLabel.textContent='FPS 暂不支持';return;
+ }
+ // 2. 按实际采样时长计算帧率；没有新帧时显示零，保持冻结状态可见。
+ fpsTimer=setInterval(()=>{
+  const now=performance.now();
+  const current=useFrameCallback?frames:renderedFrames();
+  const fps=Math.max(0,current-lastFrames)*1000/(now-lastTime);
+  fpsLabel.textContent=`${fps.toFixed(1)} FPS`;
+  lastFrames=current;lastTime=now;
+ },1000);
+}
+function disconnect(){stopFps();if(session){fetch('/session/'+session,{method:'DELETE',keepalive:true}).catch(()=>{});session=null;}abort?.abort();abort=null;const old=peer;peer=null;old?.close();video.srcObject=null;start.disabled=false;stop.disabled=true;}
+start.onclick=async()=>{
+ disconnect();start.disabled=true;stop.disabled=false;status.textContent='正在协商连接…';
+ const pc=new RTCPeerConnection({iceServers:[]});peer=pc;abort=new AbortController();const signal=abort.signal;
+ const deadline=setTimeout(()=>{if(peer===pc){disconnect();status.textContent='连接超时，请检查网络后重试';}},30000);
+ pc.ontrack=e=>{if(peer===pc){video.srcObject=new MediaStream([e.track]);startFps();video.play().catch(()=>{});}};
+ pc.onconnectionstatechange=()=>{if(peer!==pc)return;status.textContent='连接状态：'+pc.connectionState;if(pc.connectionState==='connected')clearTimeout(deadline);if(['failed','disconnected','closed'].includes(pc.connectionState)){clearTimeout(deadline);disconnect();status.textContent='连接已断开，请重新连接';}};
+ try{
+  pc.addTransceiver('video',{direction:'recvonly'});
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise((resolve,reject)=>{if(pc.iceGatheringState==='complete')return resolve();pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete')resolve();});signal.addEventListener('abort',()=>reject(new Error('连接已取消')),{once:true});if(signal.aborted)reject(new Error('连接已取消'));});
+  const response=await fetch('/offer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pc.localDescription),signal});
+  if(!response.ok)throw new Error(await response.text());
+  const answer=await response.json();if(peer!==pc){fetch('/session/'+answer.id,{method:'DELETE',keepalive:true}).catch(()=>{});return;}session=answer.id;await pc.setRemoteDescription({type:answer.type,sdp:answer.sdp});
+ }catch(error){clearTimeout(deadline);if(peer===pc){disconnect();status.textContent='连接失败：'+error.message;}}
+};
+stop.onclick=()=>{disconnect();status.textContent='已断开';};
+setInterval(async()=>{try{const r=await fetch('/api/status');if(!r.ok)return;const s=await r.json();document.querySelector('#stats').textContent=`已接收 ${s.received} 帧 · 无效消息 ${s.invalid} · 在线 ${s.peers} · 图源${s.source_alive?'有数据':'等待数据'} · 最近一帧 ${s.frame_age_seconds??'暂无'} 秒`; }catch{}},2000);
+window.addEventListener('pagehide',disconnect);
+</script></html>
