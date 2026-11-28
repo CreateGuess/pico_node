@@ -12,10 +12,10 @@ endif()
 # 提前报告基础开发依赖缺失；这些依赖可以由目标系统的离线软件包安装。
 pkg_check_modules(PICO_GST_PREREQUISITES REQUIRED
   glib-2.0>=2.64 gobject-2.0 gio-2.0 gmodule-2.0 gthread-2.0
-  openssl libcrypto libjpeg vpx>=1.7.0 libsrtp2>=2.1.0)
+  openssl libcrypto libjpeg libsrtp2>=2.1.0 libdrm)
 set(_pico_archives "${PROJECT_SOURCE_DIR}/third_party/archives")
 include("${PROJECT_SOURCE_DIR}/third_party/SourceVersions.cmake")
-foreach(_pico_archive IN ITEMS gstreamer-1.24.12.tar.gz libnice-0.1.22.tar.gz)
+foreach(_pico_archive IN ITEMS gstreamer-1.24.12.tar.gz libnice-0.1.22.tar.gz gstreamer-rockchip.tar.gz rockchip-mpp.tar.gz)
   if(NOT EXISTS "${_pico_archives}/${_pico_archive}")
     message(FATAL_ERROR "缺少离线源码包：${_pico_archives}/${_pico_archive}")
   endif()
@@ -32,9 +32,12 @@ set(_pico_gst_options
   -Dbuild-tools-source=system -Dorc=disabled -Dintrospection=disabled
   -Dtests=disabled -Dexamples=disabled -Ddoc=disabled -Dtools=enabled
   -Dgst-plugins-base:app=enabled -Dgst-plugins-base:videoconvertscale=enabled
+  -Dgst-plugins-base:videotestsrc=enabled
+  -Dgst-plugins-base:videotestsrc=enabled
   -Dgst-plugins-base:typefind=enabled
   -Dgst-plugins-good:jpeg=enabled -Dgst-plugins-good:vpx=enabled
   -Dgst-plugins-good:rtp=enabled -Dgst-plugins-good:rtpmanager=enabled
+  -Dgst-plugins-bad:videoparsers=enabled
   -Dgst-plugins-bad:webrtc=enabled -Dgst-plugins-bad:dtls=enabled
   -Dgst-plugins-bad:srtp=enabled -Dgst-plugins-bad:sctp=enabled
   -Dgst-plugins-bad:sctp-internal-usrsctp=enabled)
@@ -55,9 +58,43 @@ ExternalProject_Add(pico_gstreamer
   INSTALL_COMMAND "${Python3_EXECUTABLE}" -B "${_pico_meson}" install -C <BINARY_DIR> --no-rebuild
 )
 
+# MPP 与插件均使用本地固定源码，插件链接到同一套 GStreamer，避免混用系统插件。
+ExternalProject_Add(pico_mpp
+  DEPENDS pico_gstreamer
+  URL "${_pico_archives}/rockchip-mpp.tar.gz"
+  URL_HASH "SHA256=${PICO_MPP_SHA256}"
+  SOURCE_DIR "${PROJECT_BINARY_DIR}/third_party/mpp-source"
+  BINARY_DIR "${PROJECT_BINARY_DIR}/third_party/mpp-build"
+  UPDATE_COMMAND ""
+  CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=${_pico_gst_prefix}" -DCMAKE_INSTALL_LIBDIR=lib
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_TEST=OFF
+    "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+  BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --parallel "${PICO_DEPENDENCY_JOBS}"
+)
+ExternalProject_Add(pico_rockchip
+  DEPENDS pico_gstreamer pico_mpp
+  URL "${_pico_archives}/gstreamer-rockchip.tar.gz"
+  URL_HASH "SHA256=${PICO_ROCKCHIP_SHA256}"
+  SOURCE_DIR "${PROJECT_BINARY_DIR}/third_party/rockchip-source"
+  BINARY_DIR "${PROJECT_BINARY_DIR}/third_party/rockchip-build"
+  UPDATE_COMMAND ""
+  PATCH_COMMAND "${CMAKE_COMMAND}" "-DSOURCE_DIR=<SOURCE_DIR>"
+    -P "${PROJECT_SOURCE_DIR}/cmake/PrepareRockchip.cmake"
+  CONFIGURE_COMMAND "${CMAKE_COMMAND}" -E env
+    "PKG_CONFIG_PATH=${_pico_gst_prefix}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}"
+    "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
+    "${Python3_EXECUTABLE}" -B "${_pico_meson}" setup <BINARY_DIR> <SOURCE_DIR>
+    "--prefix=${_pico_gst_prefix}" --libdir=lib --buildtype=release --wrap-mode=nodownload
+    -Drockchipmpp=enabled -Drga=disabled -Dgpu=disabled -Drkximage=disabled
+    -Dkmssrc=disabled -Ddmaheap=disabled -Dvpxalphadec=disabled
+  BUILD_COMMAND "${PICO_NINJA_EXECUTABLE}" -C <BINARY_DIR> -j "${PICO_DEPENDENCY_JOBS}"
+  INSTALL_COMMAND "${Python3_EXECUTABLE}" -B "${_pico_meson}" install -C <BINARY_DIR> --no-rebuild
+)
+
 # GStreamer 安装后再配置应用，届时 pkg-config 才能读取生成的 .pc 文件。
 set(_pico_child_args
   -DPICO_BUILD_GSTREAMER=OFF
+  -DPICO_BUNDLED_MEDIA=ON
   "-DPICO_DEPENDENCY_PREFIX=${PICO_DEPENDENCY_PREFIX}"
   "-DPICO_GSTREAMER_PREFIX=${_pico_gst_prefix}"
   "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
@@ -66,7 +103,7 @@ set(_pico_child_args
   "-DCMAKE_BUILD_RPATH=${_pico_gst_prefix}/lib"
   "-Dxbus-dev_DIR=${xbus-dev_DIR}")
 ExternalProject_Add(pico_application
-  DEPENDS pico_gstreamer
+  DEPENDS pico_rockchip
   SOURCE_DIR "${PROJECT_SOURCE_DIR}"
   BINARY_DIR "${PROJECT_BINARY_DIR}/application"
   DOWNLOAD_COMMAND "" UPDATE_COMMAND ""
@@ -75,7 +112,4 @@ ExternalProject_Add(pico_application
   BUILD_ALWAYS TRUE
   INSTALL_COMMAND ""
 )
-# 用启动脚本设置插件和动态库路径，避免误加载机器上其他版本的插件。
-configure_file("${PROJECT_SOURCE_DIR}/cmake/run_pico_node.sh.in"
-  "${PROJECT_BINARY_DIR}/run_pico_node.sh" @ONLY)
-message(STATUS "离线构建：先编译本地 GStreamer 源码，再构建 pico_node")
+message(STATUS "离线构建：GStreamer、Rockchip MPP、硬件插件和应用；完成后直接运行 build/pico_node")

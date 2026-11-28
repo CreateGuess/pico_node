@@ -1,0 +1,16 @@
+{
+  "topics": [
+    "cam.camera.jpeg"
+  ],
+  "mode": "web",
+  "output": "../frame.jpg",
+  "web": {
+    "port": 8080,
+    "page": "../web/index.html"
+  },
+  "video": {
+    "codec": "h264",
+    "bitrate": 2000000,
+    "gop": 30
+  }
+}

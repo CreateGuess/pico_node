@@ -12,7 +12,8 @@ if(PICO_BUILD_GSTREAMER)
   include(cmake/BundledGStreamer.cmake)
   return()
 endif()
-add_executable(pico_node src/main.cpp)
+add_executable(pico_node src/main.cpp src/app_config.cpp src/media_environment.cpp)
+option(PICO_BUNDLED_MEDIA "使用随程序部署的媒体 SDK" OFF)
 target_compile_features(pico_node PRIVATE cxx_std_17)
 target_include_directories(pico_node PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(pico_node PRIVATE xbus::client Threads::Threads)
@@ -44,6 +45,22 @@ pkg_check_modules(GST REQUIRED IMPORTED_TARGET
   gstreamer-video-1.0>=1.20)
 target_sources(pico_node PRIVATE src/webrtc_server.cpp)
 target_compile_definitions(pico_node PRIVATE GST_USE_UNSTABLE_API
-  PICO_WEB_PAGE="${CMAKE_CURRENT_BINARY_DIR}/web/index.html")
+  PICO_BUNDLED_MEDIA=$<BOOL:${PICO_BUNDLED_MEDIA}>)
 target_link_libraries(pico_node PRIVATE PkgConfig::GST pico_third_party::httplib pico_third_party::json)
-configure_file(web/index.html web/index.html COPYONLY)
+# 网页、配置和动态库均相对于程序部署，不依赖启动时所在目录。
+set(_pico_runtime "${CMAKE_CURRENT_BINARY_DIR}")
+if(CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+  set(_pico_runtime "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+endif()
+configure_file(web/index.html "${_pico_runtime}/web/index.html" COPYONLY)
+# 已有运行配置可能由部署人员修改，重新配置工程时不覆盖。
+if(NOT EXISTS "${_pico_runtime}/config/pico_node.json")
+  configure_file(config/pico_node.json "${_pico_runtime}/config/pico_node.json" COPYONLY)
+endif()
+if(PICO_BUNDLED_MEDIA)
+  # 使用可传递的 DT_RPATH，同时解决插件间接依赖；路径随部署目录移动。
+  set_target_properties(pico_node PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "$ORIGIN/third_party/prefix/lib")
+  target_link_options(pico_node PRIVATE "LINKER:--disable-new-dtags")
+endif()

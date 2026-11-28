@@ -28,7 +28,7 @@
 
 ## 网页模式
 
-项目统一使用 C++17。HTTP 使用 cpp-httplib，WebRTC 使用 GStreamer webrtcbin，禁止引入 Python 运行网关。WebRTC 是固定编译功能，不设置可选功能宏；网页模式由 `pico_node TOPIC --web [PORT]` 在运行时启动。媒体处理、编码和 HTTP 操作不得放进 XBus 回调；保持缓冲有界。修改后按 README 在 Linux 接收机验收 WebRTC 播放、断开重连、会话回收和退出。
+项目统一使用 C++17。HTTP 使用 cpp-httplib，WebRTC 使用 GStreamer webrtcbin，禁止引入 Python 运行网关。WebRTC 是固定编译功能，不设置可选功能宏；程序只读取可执行文件旁的 config/pico_node.json，直接执行 ./pico_node 启动；入口使用 int main()，不得解析或使用命令行参数覆盖配置。媒体处理、编码和 HTTP 操作不得放进 XBus 回调；保持缓冲有界。修改后按 README 在 Linux 接收机验收 WebRTC 播放、断开重连、会话回收和退出。
 
 代码和构建脚本的注释统一使用中文，函数采用 Doxygen 格式说明用途、参数、返回值和必要的失败条件，函数内以编号行注释说明主要执行步骤；API、库名和协议名称保留原名。
 
@@ -40,4 +40,8 @@
 
 CJPG 头定义见 include/cam_frame.hpp：魔数 4 字节、seq u32 LE、age_ns u64 LE、width u16 LE、height u16 LE。age_ns 是相机板内采集至发布的耗时，禁止解释为跨板绝对时间。保存和媒体解码仅使用第 20 字节之后的 JPEG 正文，持有原始 SharedBuffer 直到正文复制或写盘完成。
 
-多观看者共用一个 SharedEncoder，禁止在 Peer 中重新创建 JPEG 解码器或 VP8 编码器。新增或恢复会话必须等待关键帧，编码帧不能任意丢弃；分发线程先于会话和事件循环停止。
+同一 topic 的多观看者共用一个 SharedEncoder，不同 topic 独立订阅、缓冲、统计和编码，禁止在 Peer 中重新创建 JPEG 解码器或 H.264 编码器。新增或恢复会话必须等待关键帧，编码帧不能任意丢弃；分发线程先于会话和事件循环停止。
+
+硬件编码固定使用 Rockchip MPP 的 mpph264enc，不允许静默回退软件编码。新第三方源码必须固定提交与 SHA256，保留原始许可证；所有源码解压和安装仍在构建目录完成。程序直接启动，不依赖启动脚本；资源基于可执行文件目录定位，已有部署配置不得在重新构建时覆盖。
+
+多相机配置使用 topics 数组，保留旧单 topic 配置兼容。网页按配置顺序显示话题名称，topic 必须通过文本节点显示；SDP 请求必须指定已配置 topic。单路媒体故障不应停止其他相机。

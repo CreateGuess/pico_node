@@ -21,9 +21,10 @@ namespace camframe
   // 只引用消息内的 JPEG；调用者必须在使用期间持有原始消息缓冲区。
   struct JpegView
   {
-    const std::uint8_t* data = nullptr;
+    const std::uint8_t *data = nullptr;
     std::size_t size = 0;
     Header header;
+    // 是否带 CJPG 封装头；若为假，则 header 字段无效，data 指向 JPEG 正文。
     bool wrapped = false;
   };
 
@@ -34,14 +35,17 @@ namespace camframe
    * @param out 成功时写入帧序号、板内耗时和图像宽高。
    * @return 长度不足或魔数不匹配时返回假。
    */
-  inline bool read_header(const std::uint8_t* p, std::size_t n, Header& out)
+  inline bool read_header(const std::uint8_t *p, std::size_t n, Header &out)
   {
     // 1. 确认消息头完整且包含 CJPG 魔数。
-    if (n < kHeaderBytes || std::memcmp(p, kMagic, 4) != 0) return false;
+    if (n < kHeaderBytes || std::memcmp(p, kMagic, 4) != 0)
+      return false;
     // 2. 按协议偏移和小端字节序读取各字段。
     out = Header{};
-    for (unsigned i = 0; i < 4; ++i) out.seq |= std::uint32_t(p[4 + i]) << (8 * i);
-    for (unsigned i = 0; i < 8; ++i) out.age_ns |= std::uint64_t(p[8 + i]) << (8 * i);
+    for (unsigned i = 0; i < 4; ++i)
+      out.seq |= std::uint32_t(p[4 + i]) << (8 * i);
+    for (unsigned i = 0; i < 8; ++i)
+      out.age_ns |= std::uint64_t(p[8 + i]) << (8 * i);
     out.width = std::uint16_t(p[16]) | (std::uint16_t(p[17]) << 8);
     out.height = std::uint16_t(p[18]) | (std::uint16_t(p[19]) << 8);
     return true;
@@ -54,23 +58,33 @@ namespace camframe
    * @param out 成功时返回 JPEG 视图及已解析的封装元数据。
    * @return 成功返回空指针，失败返回中文原因；不验证 JPEG 是否能完整解码。
    */
-  inline const char* parse_jpeg(const std::uint8_t* p, std::size_t n, JpegView& out)
+  inline const char *parse_jpeg(const std::uint8_t *p, std::size_t n, JpegView &out)
   {
     // 1. 校验整条消息上限，再通过魔数识别是否带封装头。
     out = JpegView{};
-    if (n > kMaxMessageBytes) return "消息超过8MiB";
-    if (n < 4) return "消息不足4字节";
+    if (n > kMaxMessageBytes)
+      return "消息超过8MiB";
+    if (n < 4)
+      return "消息不足4字节";
     out.wrapped = std::memcmp(p, kMagic, 4) == 0;
     std::size_t offset = 0;
-    if (out.wrapped) {
-      if (!read_header(p, n, out.header)) return "CJPG头不足20字节";
+    // 解析封装头
+    if (out.wrapped)
+    {
+      if (!read_header(p, n, out.header))
+      {
+        return "CJPG头不足20字节";
+      }
       offset = kHeaderBytes;
     }
     // 2. 仅检查 JPEG 正文的首尾标记，不将封装头交给解码器或写入图片文件。
     const auto size = n - offset;
-    if (size < 4) return "JPEG正文不足4字节";
-    if (p[offset] != 0xff || p[offset + 1] != 0xd8) return "JPEG正文缺少起始FFD8";
-    if (p[n - 2] != 0xff || p[n - 1] != 0xd9) return "JPEG正文缺少结束FFD9";
+    if (size < 4)
+      return "JPEG正文不足4字节";
+    if (p[offset] != 0xff || p[offset + 1] != 0xd8)
+      return "JPEG正文缺少起始FFD8";
+    if (p[n - 2] != 0xff || p[n - 1] != 0xd9)
+      return "JPEG正文缺少结束FFD9";
     out.data = p + offset;
     out.size = size;
     return nullptr;
